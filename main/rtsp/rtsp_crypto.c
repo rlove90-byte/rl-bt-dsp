@@ -1,5 +1,6 @@
 #include "rtsp_crypto.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -13,7 +14,7 @@ static const char *TAG = "rtsp_crypto";
 static int send_all(int socket, const uint8_t *data, size_t len) {
   size_t sent = 0;
   while (sent < len) {
-    int r = send(socket, data + sent, len - sent, 0);
+    ssize_t r = send(socket, data + sent, len - sent, 0);
     if (r <= 0) {
       return -1;
     }
@@ -29,15 +30,27 @@ int rtsp_crypto_read_block(int socket, rtsp_conn_t *conn, uint8_t *buffer,
     return -1;
   }
 
-  // Read 2-byte length header (little-endian)
+  // Read 2-byte length header (little-endian).  The socket has SO_RCVTIMEO
+  // set for shutdown responsiveness; if it fires after a partial read we
+  // must keep waiting rather than return — abandoning N consumed bytes here
+  // permanently desyncs the encrypted stream framing and turns every later
+  // recv into garbage interpreted as a fresh length prefix.  Cancellation
+  // is handled by shutdown(SHUT_RDWR), which makes recv return a real error.
   uint8_t len_buf[2];
-  int received = 0;
+  size_t received = 0;
   while (received < 2) {
-    int r = recv(socket, len_buf + received, 2 - received, 0);
-    if (r <= 0) {
-      return -1;
+    ssize_t r = recv(socket, len_buf + received, 2 - received, 0);
+    if (r > 0) {
+      received += (size_t)r;
+      continue;
     }
-    received += r;
+    if (r == 0) {
+      return -1; // peer closed
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+      continue;
+    }
+    return -1;
   }
 
   uint16_t block_len = (uint16_t)len_buf[0] | ((uint16_t)len_buf[1] << 8);
@@ -57,13 +70,21 @@ int rtsp_crypto_read_block(int socket, rtsp_conn_t *conn, uint8_t *buffer,
   }
 
   received = 0;
-  while ((size_t)received < encrypted_len) {
-    int r = recv(socket, encrypted + received, encrypted_len - received, 0);
-    if (r <= 0) {
-      free(encrypted);
-      return -1;
+  while (received < encrypted_len) {
+    ssize_t r = recv(socket, encrypted + received, encrypted_len - received, 0);
+    if (r > 0) {
+      received += (size_t)r;
+      continue;
     }
-    received += r;
+    if (r == 0) {
+      free(encrypted);
+      return -1; // peer closed
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+      continue;
+    }
+    free(encrypted);
+    return -1;
   }
 
   // Decrypt using session keys
