@@ -184,32 +184,84 @@ void audio_receiver_set_anchor_time(uint64_t clock_id, uint64_t network_time_ns,
     return;
   }
 
-  // Detect a seek where the buffer content is far displaced from the new
-  // anchor position.  Threshold is 5 seconds of samples — large enough to
-  // clear normal pre-buffer depth after a pause (typically 1-3 s), but
-  // small enough to catch any real seek (which displaces by the full delta
-  // from the current song position).  Both directions are checked:
-  //   rtp_ahead > threshold  → backward seek (buffer ahead of new anchor)
-  //   rtp_ahead < -threshold → forward seek (buffer behind new anchor)
-  // Long-pause resume where the anchor advances over the pre-buffer is
-  // handled by the bulk-flush path in audio_timing_read, but catching it
-  // here avoids even the first DMA callback of silence.
-  // Window size for the upper RTP gate: 10 s of samples.  Large enough that
-  // a normal 2-4 s pre-buffer passes, but small enough to reject stale frames
-  // left in the TCP socket buffer after a backward seek (which are 60+ s ahead
-  // of the new anchor when seeking back to near the start of a track).
   int sample_rate = receiver.stream->format.sample_rate;
   if (sample_rate <= 0) {
     sample_rate = 44100;
   }
+  // Window size for the upper RTP gate: 10 s of samples.  Large enough that
+  // a normal 2-4 s pre-buffer passes, but small enough to reject stale frames
+  // left in the TCP socket buffer after a backward seek.
   const uint32_t gate_window = (uint32_t)(10 * sample_rate);
+  const int32_t seek_threshold = 5 * sample_rate;
 
+  // --- Phase 1: Arm RTP gates BEFORE opening the blanket gate -----------
+  //
+  // The blanket gate (discard_all_until_anchor) blocks ALL frames from the
+  // TCP task.  The per-RTP gates filter by timestamp range.  On single-core
+  // ESP32-S2, ESP_LOGI can yield to the scheduler, so any gap between
+  // clearing the blanket and arming the per-RTP gates lets the TCP task
+  // queue stale frames.  Arm first, then open.
+  bool gates_armed = false;
+
+  // Path A: seek_flush set arm_gate_on_next_anchor because the buffer was
+  // already empty when the flush happened (forward-seek).
+  if (receiver.arm_gate_on_next_anchor) {
+    receiver.arm_gate_on_next_anchor = false;
+    receiver.discard_before_rtp = rtp_time;
+    receiver.discard_before_rtp_valid = true;
+    receiver.discard_above_rtp = rtp_time + gate_window;
+    receiver.discard_above_rtp_valid = true;
+    gates_armed = true;
+    ESP_LOGI(TAG,
+             "RTP gates armed on anchor: discard_before=%lu discard_above=%lu",
+             (unsigned long)rtp_time, (unsigned long)(rtp_time + gate_window));
+  }
+
+  // Path B: Anchor-change detection — the phone changed track with a
+  // PAUSE → RESUME cycle but no FLUSHBUFFERED.  The buffer may already be
+  // empty (consumed during playback), so the seek-detection heuristic
+  // below (which needs oldest_rtp from the buffer) would miss it.
+  // Compare the new anchor's RTP with the previous one; a delta > 5 s of
+  // samples means a different track.
+  if (!gates_armed && receiver.timing.anchor_valid) {
+    int32_t delta = (int32_t)(rtp_time - receiver.timing.anchor_rtp_time);
+    int32_t abs_delta = delta < 0 ? -delta : delta;
+    if (abs_delta > seek_threshold) {
+      ESP_LOGI(TAG,
+               "Anchor change detected: old_rtp=%lu new_rtp=%lu "
+               "delta=%ld samples (%.1f s) — flushing & arming gates",
+               (unsigned long)receiver.timing.anchor_rtp_time,
+               (unsigned long)rtp_time, (long)delta,
+               (float)delta / sample_rate);
+      audio_buffer_flush(&receiver.buffer);
+      receiver.timing.playout_started = false;
+      receiver.timing.pending_valid = false;
+      receiver.timing.pending_frame_len = 0;
+      receiver.timing.ready_time_us = 0;
+      receiver.blocks_read_in_sequence = 0;
+      receiver.discard_before_rtp = rtp_time;
+      receiver.discard_before_rtp_valid = true;
+      receiver.discard_above_rtp = rtp_time + gate_window;
+      receiver.discard_above_rtp_valid = true;
+      receiver.timing.post_flush = true;
+      receiver.timing.post_flush_start_us = 0;
+      gates_armed = true;
+    }
+  }
+
+  // NOW safe to clear the blanket gate — per-RTP gates are active.
+  receiver.discard_all_until_anchor = false;
+
+  // --- Phase 2: Seek detection from buffer content ----------------------
+  //
+  // If stale data managed to enter the buffer (e.g. queued before
+  // seek_flush was called), detect it by comparing the oldest buffered
+  // RTP timestamp against the new anchor.
   uint32_t oldest_rtp = 0;
   if (audio_buffer_oldest_timestamp(&receiver.buffer, &oldest_rtp)) {
     int32_t rtp_ahead = (int32_t)(oldest_rtp - rtp_time);
-    int32_t flush_threshold = 5 * sample_rate; // 5 seconds of samples
     int32_t abs_ahead = rtp_ahead < 0 ? -rtp_ahead : rtp_ahead;
-    if (abs_ahead > flush_threshold) {
+    if (abs_ahead > seek_threshold) {
       ESP_LOGI(TAG,
                "Seek detected: oldest_rtp=%lu, new anchor rtp=%lu, "
                "delta=%ld samples (%.1f s) — flushing stale buffer",
@@ -221,31 +273,15 @@ void audio_receiver_set_anchor_time(uint64_t clock_id, uint64_t network_time_ns,
       receiver.timing.pending_frame_len = 0;
       receiver.timing.ready_time_us = 0;
       receiver.blocks_read_in_sequence = 0;
-      // Arm both RTP gates so the TCP task discards stale frames at decode
-      // time rather than letting them fill the ring buffer and trigger repeated
-      // bulk-flushes in the DMA callback.
-      // discard_before_rtp catches forward-seek stale frames (RTP < anchor).
-      // discard_above_rtp catches backward-seek stale frames (RTP >> anchor).
-      receiver.discard_before_rtp = rtp_time;
-      receiver.discard_before_rtp_valid = true;
-      receiver.discard_above_rtp = rtp_time + gate_window;
-      receiver.discard_above_rtp_valid = true;
-      receiver.arm_gate_on_next_anchor = false; // already handled
+      receiver.timing.post_flush = true;
+      receiver.timing.post_flush_start_us = 0;
+      if (!gates_armed) {
+        receiver.discard_before_rtp = rtp_time;
+        receiver.discard_before_rtp_valid = true;
+        receiver.discard_above_rtp = rtp_time + gate_window;
+        receiver.discard_above_rtp_valid = true;
+      }
     }
-  }
-
-  // Forward-seek path: seek_flush empties the buffer before the anchor
-  // arrives, so the oldest_rtp check above never fires. arm_gate_on_next_anchor
-  // was set by seek_flush to ensure we still arm both gates here.
-  if (receiver.arm_gate_on_next_anchor) {
-    receiver.arm_gate_on_next_anchor = false;
-    receiver.discard_before_rtp = rtp_time;
-    receiver.discard_before_rtp_valid = true;
-    receiver.discard_above_rtp = rtp_time + gate_window;
-    receiver.discard_above_rtp_valid = true;
-    ESP_LOGI(TAG,
-             "RTP gates armed on anchor: discard_before=%lu discard_above=%lu",
-             (unsigned long)rtp_time, (unsigned long)(rtp_time + gate_window));
   }
 
   // Pin the PTP clock to the master announced by the anchor packet's
@@ -462,6 +498,7 @@ void audio_receiver_flush(void) {
   receiver.discard_before_rtp_valid = false;
   receiver.discard_above_rtp_valid = false;
   receiver.arm_gate_on_next_anchor = false;
+  receiver.discard_all_until_anchor = false;
   receiver.blocks_read_in_sequence = 1;
 }
 
@@ -479,6 +516,10 @@ void audio_receiver_seek_flush(void) {
   // the time SETRATEANCHORTIME arrives, so the seek-detection heuristic
   // (which needs oldest_rtp from the buffer) would otherwise miss arming it.
   receiver.arm_gate_on_next_anchor = true;
+  // Reject ALL incoming frames until the next anchor.  Prevents stale TCP
+  // data from filling the buffer between FLUSHBUFFERED and SETRATEANCHORTIME,
+  // which would cause a second flush and double the startup delay.
+  receiver.discard_all_until_anchor = true;
 }
 
 void audio_receiver_set_deferred_flush(uint32_t flush_until_ts) {

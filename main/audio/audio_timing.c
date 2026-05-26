@@ -51,11 +51,12 @@
 // pre-buffer depth that normal post_flush handles (~200 ms early), but well
 // below the multi-second lateness seen on AP2 group rejoin.
 #define POST_FLUSH_LATE_DROP_US 300000LL // 300 ms
-// POST_FLUSH_TIMEOUT_US: maximum duration of the post_flush bypass.  After a
-// seek/flush the phone's pre-buffer window causes frames to appear hundreds of
-// ms early.  We play them immediately for this duration so the user hears audio
-// right away, then revert to normal timing so the anchor can enforce A/V sync.
-#define POST_FLUSH_TIMEOUT_US 500000LL // 500 ms
+// POST_FLUSH_TIMEOUT_US: safety-net timeout for the post_flush bypass.
+// Normal exit is timing-driven (exit only when early_us is within
+// ±TIMING_THRESHOLD_US).  This timeout only fires if timing never stabilises
+// (e.g. anchor permanently stuck), preventing indefinite bypass.  Set long
+// enough that it never fires during normal track skips.
+#define POST_FLUSH_TIMEOUT_US 5000000LL // 5 s (safety net only)
 
 // Closed-loop fill-depth controller.  Keeps the time-span of buffered audio
 // (newest_play_time − oldest_play_time) close to timing->output_latency_us
@@ -295,9 +296,13 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
   const audio_format_t *format = &stream->format;
   int buffered_frames = audio_buffer_get_frame_count(buffer);
 
-  // Wait for enough buffer before starting
+  // Wait for enough buffer before starting.
+  // In post_flush mode (after a seek/skip), start playing as soon as 1 frame
+  // is available — the whole point is to minimise the gap between tracks.
+  // Normal startup still waits for target_buffer_frames to build jitter margin.
   if (!timing->playout_started && !timing->pending_valid) {
-    if (buffered_frames < (int)timing->target_buffer_frames) {
+    int required = timing->post_flush ? 1 : (int)timing->target_buffer_frames;
+    if (buffered_frames < required) {
       return 0;
     }
     // Wait for anchor before playing.
@@ -543,11 +548,22 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
             }
             continue;
           }
-          if ((early_us >= -TIMING_THRESHOLD_US &&
-               early_us <= TIMING_THRESHOLD_US) ||
-              flush_elapsed >= POST_FLUSH_TIMEOUT_US) {
+          if (early_us >= -TIMING_THRESHOLD_US &&
+              early_us <= TIMING_THRESHOLD_US) {
+            // Timing has stabilised — exit post_flush cleanly so normal
+            // timing takes over without a discontinuity.
             ESP_LOGI(TAG, "post_flush done: early=%lld ms, elapsed=%lld ms",
                      early_us / 1000LL, flush_elapsed / 1000LL);
+            timing->post_flush = false;
+            timing->post_flush_start_us = 0;
+          } else if (flush_elapsed >= POST_FLUSH_TIMEOUT_US) {
+            // Safety net: timing never stabilised — exit to avoid playing
+            // indefinitely out of sync.  A brief gap may follow if the next
+            // frame is still outside the normal timing window.
+            ESP_LOGW(
+                TAG,
+                "post_flush safety timeout: early=%lld ms, elapsed=%lld ms",
+                early_us / 1000LL, flush_elapsed / 1000LL);
             timing->post_flush = false;
             timing->post_flush_start_us = 0;
           }
