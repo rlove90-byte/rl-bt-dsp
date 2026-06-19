@@ -142,6 +142,39 @@ static void ensure_stream_ports(rtsp_conn_t *conn, bool buffered) {
   }
 }
 
+static bool start_ntp_timing_or_fail(int socket, rtsp_conn_t *conn,
+                                     const rtsp_request_t *req) {
+  if (conn->client_timing_port == 0 || conn->client_ip == 0) {
+    return true;
+  }
+
+  esp_err_t err =
+      ntp_clock_start_client(conn->client_ip, conn->client_timing_port);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to start NTP timing client: %s",
+             esp_err_to_name(err));
+    rtsp_send_response(socket, conn, 500, "Internal Error", req->cseq, NULL,
+                       NULL, 0);
+    return false;
+  }
+  return true;
+}
+
+static bool start_audio_receiver_or_fail(int socket, rtsp_conn_t *conn,
+                                         const rtsp_request_t *req,
+                                         int64_t stream_type) {
+  audio_receiver_set_stream_type((audio_stream_type_t)stream_type);
+  esp_err_t err = audio_receiver_start_stream(
+      conn->data_port, conn->control_port, conn->buffered_port);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to start audio receiver: %s", esp_err_to_name(err));
+    rtsp_send_response(socket, conn, 500, "Internal Error", req->cseq, NULL,
+                       NULL, 0);
+    return false;
+  }
+  return true;
+}
+
 // Event port task - handles AirPlay 2 session persistence
 static void event_port_task(void *pvParameters) {
   int listen_socket = (int)(intptr_t)pvParameters;
@@ -1125,9 +1158,8 @@ static void handle_setup(int socket, rtsp_conn_t *conn,
       ESP_LOGI(TAG, "Client ports: control=%u timing=%u",
                conn->client_control_port, conn->client_timing_port);
 
-      // Start NTP timing client if client has a timing port
-      if (conn->client_timing_port > 0 && conn->client_ip != 0) {
-        ntp_clock_start_client(conn->client_ip, conn->client_timing_port);
+      if (!start_ntp_timing_or_fail(socket, conn, req)) {
+        return;
       }
 
       ensure_stream_ports(conn, false);
@@ -1200,12 +1232,17 @@ static void handle_setup(int socket, rtsp_conn_t *conn,
   uint16_t response_data_port =
       buffered ? conn->buffered_port : conn->data_port;
 
+  if (!start_audio_receiver_or_fail(socket, conn, req, stream_type)) {
+    return;
+  }
+
   if (is_bplist) {
     uint8_t plist_body[256];
     size_t plist_len = bplist_build_stream_setup(
         plist_body, sizeof(plist_body), stream_type, response_data_port,
         conn->control_port, AP2_AUDIO_BUFFER_SIZE);
     if (plist_len == 0) {
+      audio_receiver_stop();
       rtsp_send_response(socket, conn, 500, "Internal Error", req->cseq, NULL,
                          NULL, 0);
       return;
@@ -1222,9 +1259,9 @@ static void handle_setup(int socket, rtsp_conn_t *conn,
     ESP_LOGI(TAG, "Client ports: control=%u timing=%u",
              conn->client_control_port, conn->client_timing_port);
 
-    // Start NTP timing client if client has a timing port
-    if (conn->client_timing_port > 0 && conn->client_ip != 0) {
-      ntp_clock_start_client(conn->client_ip, conn->client_timing_port);
+    if (!start_ntp_timing_or_fail(socket, conn, req)) {
+      audio_receiver_stop();
+      return;
     }
 
     char transport_response[256];
@@ -1236,11 +1273,6 @@ static void handle_setup(int socket, rtsp_conn_t *conn,
     rtsp_send_response(socket, conn, 200, "OK", req->cseq, transport_response,
                        NULL, 0);
   }
-
-  // Start audio receiver
-  audio_receiver_set_stream_type((audio_stream_type_t)stream_type);
-  audio_receiver_start_stream(conn->data_port, conn->control_port,
-                              conn->buffered_port);
 
   // Enable NACK retransmission if we know the client's control port
   if (conn->client_control_port > 0 && conn->client_ip != 0) {
@@ -1282,8 +1314,9 @@ static void handle_record(int socket, rtsp_conn_t *conn,
     audio_receiver_set_playing(true);
   } else {
     // Fresh start or post-teardown reconnect: full stream restart.
-    audio_receiver_start_stream(conn->data_port, conn->control_port,
-                                conn->buffered_port);
+    if (!start_audio_receiver_or_fail(socket, conn, req, conn->stream_type)) {
+      return;
+    }
     if (conn->client_control_port > 0 && conn->client_ip != 0) {
       audio_receiver_set_client_control(conn->client_ip,
                                         conn->client_control_port);

@@ -265,12 +265,14 @@ cleanup:
   audio_output_flush();
   ntp_clock_stop();
 
-  // AirPlay v1 grace period: iOS sends TEARDOWN + TCP close for both pause
-  // and genuine disconnect. Wait briefly and probe DACP mDNS to tell them
-  // apart. Emit PAUSED immediately so listeners (e.g. BT switching) don't
-  // act on the disconnect prematurely. Runtime-conditional on the active
-  // protocol so AirPlay 2 sessions still clear immediately.
-  if (conn && conn->protocol_version == 1) {
+  bool has_dacp_remote = conn && conn->protocol_version == 1 &&
+                         conn->dacp_id[0] != '\0' &&
+                         conn->active_remote[0] != '\0';
+
+  // iOS v1 pause handling needs DACP to distinguish pause from disconnect.
+  // Third-party RAOP clients often have no DACP remote; disconnect them
+  // immediately instead of delaying slot cleanup with an iOS-only grace path.
+  if (has_dacp_remote) {
     if (!slot->should_stop) {
       s_resume_requested = false;
       rtsp_events_emit(RTSP_EVENT_PAUSED, NULL);
@@ -515,9 +517,23 @@ static void server_task(void *pvParameters) {
   vTaskDelete(NULL);
 }
 
+static bool rtsp_server_wait_for_task_stopped(int timeout_ticks) {
+  while (server_task_handle != NULL && timeout_ticks-- > 0) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  return server_task_handle == NULL;
+}
+
 esp_err_t rtsp_server_start(void) {
   if (server_task_handle != NULL) {
-    return ESP_ERR_INVALID_STATE;
+    if (server_running) {
+      return ESP_ERR_INVALID_STATE;
+    }
+    ESP_LOGW(TAG, "RTSP server task still stopping, waiting");
+    if (!rtsp_server_wait_for_task_stopped(40)) {
+      ESP_LOGE(TAG, "Previous RTSP server task did not stop");
+      return ESP_ERR_INVALID_STATE;
+    }
   }
 
   BaseType_t task_ret =
@@ -540,10 +556,7 @@ void rtsp_server_stop(void) {
   }
 
   if (server_task_handle != NULL) {
-    for (int i = 0; i < 20 && server_task_handle != NULL; i++) {
-      vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    if (server_task_handle != NULL) {
+    if (!rtsp_server_wait_for_task_stopped(40)) {
       ESP_LOGW(TAG, "RTSP server task did not exit within timeout");
     }
   }

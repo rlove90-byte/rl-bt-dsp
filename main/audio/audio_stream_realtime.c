@@ -581,6 +581,11 @@ static esp_err_t realtime_start(audio_stream_t *stream, uint16_t port) {
       ESP_LOGE(TAG, "Failed to create control receiver task");
       close(state->control_socket);
       state->control_socket = 0;
+      stream->running = false;
+      close(state->data_socket);
+      state->data_socket = 0;
+      realtime_wait_for_tasks_stopped(state, 20);
+      return ESP_FAIL;
     }
   }
 
