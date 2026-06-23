@@ -1756,7 +1756,10 @@ static void handle_teardown(int socket, rtsp_conn_t *conn,
   conn->stream_paused =
       has_streams; // Keep session ready if only streams torn down
 
-  if (!has_streams) {
+  if (has_streams) {
+    // Stream-level teardown — session still open, iOS considers this paused
+    rtsp_events_emit(RTSP_EVENT_PAUSED, NULL);
+  } else {
     // Full teardown — server cleanup will emit RTSP_EVENT_DISCONNECTED
     // when the TCP connection closes.
     // For v1 sessions, keep the DACP session alive across teardown so the
