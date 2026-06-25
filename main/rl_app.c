@@ -61,11 +61,11 @@ static void on_tws_slave(bool connected) {
 static void batt_task(void *arg) {
     while(1){
         vTaskDelay(pdMS_TO_TICKS(60000));
-        if(rl_battery_is_critical()){
+        if(rl_battery_is_critical() && rl_battery_get_mv() > 12100){
             ESP_LOGW(TAG,"Battery critical %u%%",rl_battery_get_pct());
             rl_leds_set_mode(LED_MODE_LOW_BATTERY);
             rl_amp_mute();
-        } else if(rl_battery_is_low()){
+        } else if(rl_battery_is_low() && rl_battery_get_mv() > 12100){
             ESP_LOGW(TAG,"Battery low %u%%",rl_battery_get_pct());
             rl_leds_set_mode(LED_MODE_LOW_BATTERY);
         }
@@ -82,7 +82,7 @@ void rl_app_init(void) {
     rl_buttons_init(on_button);
     rl_tws_init(on_tws_audio, on_tws_slave);
     apply_dsp(DSP_MODE_INDOOR);
-    xTaskCreate(batt_task,"batt_mon",2048,NULL,2,NULL);
+    xTaskCreate(batt_task,"batt_mon",4096,NULL,2,NULL);
     rl_amp_unmute();
     ESP_LOGI(TAG,"RL BT DSP init complete");
 }
