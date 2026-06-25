@@ -289,6 +289,10 @@ void app_main(void) {
 
   buttons_init();
 
+  // RL BT DSP custom components
+  extern void rl_app_init(void);
+  rl_app_init();
+
   while (1) {
     vTaskDelay(pdMS_TO_TICKS(10000));
   }

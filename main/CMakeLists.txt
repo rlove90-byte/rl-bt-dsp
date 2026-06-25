@@ -41,6 +41,7 @@ set( SRC_FILES
     "led.c"
     "audio/eq_events.c"
     "buttons.c"
+    "rl_app.c"
     "playback_control.c"
     "dacp_client.c"
 )
@@ -101,6 +102,7 @@ set( DEPS
 # Bluetooth component only needed when A2DP is enabled
 #if(CONFIG_BT_A2DP_ENABLE)
     list(APPEND DEPS bt)
+    list(APPEND DEPS rl_buttons rl_leds rl_battery rl_tws rl_amp)
 #endif()
 
 # Ethernet component only needed when W5500 is enabled

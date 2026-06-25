@@ -48,7 +48,7 @@ CONFIG_LOG_COLORS=y
 
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="components/boards/partitions.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="components/boards/partitions-4m.csv"
 
 # Compiler optimization
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
@@ -61,4 +61,5 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # Push allocations > 1024 bytes to SPIRAM, keeping internal DRAM free for
 # semaphores, DMA descriptors and WiFi management structures that *must*
 # live in internal DRAM.  Default is 16384 — far too aggressive
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
