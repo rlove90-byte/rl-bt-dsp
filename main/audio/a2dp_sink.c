@@ -53,7 +53,7 @@ static const char *TAG = "bt_a2dp";
 #define BT_TASK_PRIO  (configMAX_PRIORITIES - 3)
 #define BT_TASK_QLEN  10
 
-#define I2S_TASK_STACK 2560
+#define I2S_TASK_STACK 8192
 #define I2S_TASK_PRIO  7
 
 #if CONFIG_FREERTOS_UNICORE

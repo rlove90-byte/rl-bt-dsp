@@ -273,6 +273,10 @@ void app_main(void) {
     start_airplay_services();
   }
 
+// Init I2S audio output before BT so it is ready when A2DP connects
+  ESP_ERROR_CHECK(audio_output_init());
+  audio_output_start();
+
 #ifdef CONFIG_BT_A2DP_ENABLE
   // Initialize Bluetooth A2DP Sink
   {
