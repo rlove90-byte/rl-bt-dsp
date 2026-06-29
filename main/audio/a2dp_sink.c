@@ -26,6 +26,7 @@
 #include "esp_a2dp_api.h"
 #include "esp_avrc_api.h"
 #include "esp_bt.h"
+#include "esp_wifi.h"
 #include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
@@ -295,7 +296,9 @@ static void bt_a2dp_evt_handler(uint16_t event, void *param) {
     esp_a2d_connection_state_t state = a2d->conn_stat.state;
 
     if (state == ESP_A2D_CONNECTION_STATE_CONNECTING) {
-      ESP_LOGI(TAG, "A2DP connecting...");
+      ESP_LOGI(TAG, "A2DP connecting - stopping WiFi to free internal RAM");
+      esp_wifi_stop();
+      esp_wifi_deinit();
     } else if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
       ESP_LOGI(TAG, "A2DP connected");
       s_connected = true;
@@ -712,11 +715,11 @@ static void bt_stack_evt_handler(uint16_t event, void *param) {
 
   // AVRC Controller (to get metadata from source)
   esp_avrc_ct_register_callback(bt_avrc_ct_cb);
-  // esp_avrc_ct_init(); // Disabled to save internal RAM
+  esp_avrc_ct_init();
 
   // AVRC Target (to receive volume commands)
   esp_avrc_tg_register_callback(bt_avrc_tg_cb);
-  // esp_avrc_tg_init(); // Disabled to save internal RAM
+  esp_avrc_tg_init();
   esp_avrc_rn_evt_cap_mask_t evt_set = {0};
   evt_set.bits = (1 << ESP_AVRC_RN_VOLUME_CHANGE);
   esp_avrc_tg_set_rn_evt_cap(&evt_set);
@@ -726,6 +729,19 @@ static void bt_stack_evt_handler(uint16_t event, void *param) {
   esp_a2d_sink_register_data_callback(bt_a2dp_data_cb);
   esp_a2d_sink_init();
 
+  // Pre-create I2S writer task before AVRC consumes remaining internal RAM
+  if (s_ringbuf == NULL) {
+    s_ringbuf = xRingbufferCreate(RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF);
+  }
+  if (s_i2s_sem == NULL) {
+    s_i2s_sem = xSemaphoreCreateBinary();
+  }
+  s_i2s_task_running = true;
+  {
+    BaseType_t r = xTaskCreatePinnedToCore(bt_i2s_writer_task, "bt_i2s", I2S_TASK_STACK, NULL,
+                            I2S_TASK_PRIO, &s_i2s_task_handle, I2S_TASK_CORE);
+    ESP_LOGI("bt_i2s", "Pre-create: %d internal free: %lu", r, esp_get_free_internal_heap_size());
+  }
   // Apply saved discoverable state
   if (s_bt_discoverable) {
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
