@@ -47,20 +47,16 @@ static const char *TAG = "bt_a2dp";
 /* ========================================================================== */
 
 #define RINGBUF_SIZE     ((size_t)16 * 1024)
-#define RINGBUF_PREFETCH (RINGBUF_SIZE * 6 / 10)
+#define RINGBUF_PREFETCH (4096)
 
 #define BT_TASK_STACK 4096
 #define BT_TASK_PRIO  (configMAX_PRIORITIES - 3)
 #define BT_TASK_QLEN  10
 
-#define I2S_TASK_STACK 8192
+#define I2S_TASK_STACK 3072
 #define I2S_TASK_PRIO  7
 
-#if CONFIG_FREERTOS_UNICORE
 #define I2S_TASK_CORE 0
-#else
-#define I2S_TASK_CORE 1
-#endif
 
 /* ========================================================================== */
 /* BT App Task Types                                                          */
@@ -198,9 +194,11 @@ static void i2s_task_start(void) {
     s_i2s_sem = xSemaphoreCreateBinary();
   }
 
+  ESP_LOGI("bt_i2s", "Free heap before task create: %lu", esp_get_free_heap_size());
   s_i2s_task_running = true;
-  xTaskCreatePinnedToCore(bt_i2s_writer_task, "bt_i2s", I2S_TASK_STACK, NULL,
+  BaseType_t ret = xTaskCreatePinnedToCore(bt_i2s_writer_task, "bt_i2s", I2S_TASK_STACK, NULL,
                           I2S_TASK_PRIO, &s_i2s_task_handle, I2S_TASK_CORE);
+  ESP_LOGI("bt_i2s", "Task create result: %d, handle: %p free heap: %lu", ret, s_i2s_task_handle, esp_get_free_internal_heap_size());
 }
 
 static void i2s_task_stop(void) {
@@ -243,6 +241,7 @@ static void i2s_task_stop(void) {
 /* ========================================================================== */
 
 static void bt_a2dp_data_cb(const uint8_t *data, uint32_t len) {
+  ESP_LOGI("a2dp", "data cb: %lu bytes", len);
   // Snapshot the ringbuf handle so it can't be freed between the NULL
   // check and the API calls (i2s_task_stop sets s_ringbuf = NULL).
   RingbufHandle_t rb = s_ringbuf;
@@ -257,8 +256,10 @@ static void bt_a2dp_data_cb(const uint8_t *data, uint32_t len) {
 
   switch (s_ringbuf_mode) {
   case RINGBUF_MODE_PREFETCHING:
+    ESP_LOGI("a2dp","prefetch: free=%u filled=%u prefetch=%u", free_size, RINGBUF_SIZE-free_size+len, RINGBUF_PREFETCH);
     xRingbufferSend(rb, data, len, 0);
     if ((RINGBUF_SIZE - free_size + len) >= RINGBUF_PREFETCH) {
+      ESP_LOGI("a2dp","prefetch reached - starting I2S");
       s_ringbuf_mode = RINGBUF_MODE_PROCESSING;
       xSemaphoreGive(s_i2s_sem);
     }
@@ -711,11 +712,11 @@ static void bt_stack_evt_handler(uint16_t event, void *param) {
 
   // AVRC Controller (to get metadata from source)
   esp_avrc_ct_register_callback(bt_avrc_ct_cb);
-  esp_avrc_ct_init();
+  // esp_avrc_ct_init(); // Disabled to save internal RAM
 
   // AVRC Target (to receive volume commands)
   esp_avrc_tg_register_callback(bt_avrc_tg_cb);
-  esp_avrc_tg_init();
+  // esp_avrc_tg_init(); // Disabled to save internal RAM
   esp_avrc_rn_evt_cap_mask_t evt_set = {0};
   evt_set.bits = (1 << ESP_AVRC_RN_VOLUME_CHANGE);
   esp_avrc_tg_set_rn_evt_cap(&evt_set);

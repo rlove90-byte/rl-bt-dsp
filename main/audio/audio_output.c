@@ -121,7 +121,7 @@ static void playback_task(void *arg) {
       led_audio_feed(play_buf, play_samples);
       i2s_channel_write(tx_handle, play_buf, play_samples * 4, &written,
                         portMAX_DELAY);
-      ESP_LOGD(TAG, "I2S write: %u bytes written", (unsigned int)written);
+      ESP_LOGI(TAG, "I2S write: %u bytes written", (unsigned int)written);
       taskYIELD();
     } else {
       // ESP_LOGW(TAG, "Receiver underflow - playing silence");
