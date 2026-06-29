@@ -769,6 +769,8 @@ esp_err_t web_server_start(uint16_t port) {
       28; // Room for captive portal + EQ + speedtest + brightness
   config.max_resp_headers = 8;
   config.stack_size = 8192;
+  config.recv_wait_timeout = 30;
+  config.send_wait_timeout = 30;
 
   esp_err_t err = httpd_start(&s_server, &config);
   if (err != ESP_OK) {

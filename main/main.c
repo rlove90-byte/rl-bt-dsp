@@ -21,6 +21,7 @@
 #ifdef CONFIG_BT_A2DP_ENABLE
 #include "a2dp_sink.h"
 #include "rtsp_events.h"
+#include "rl_app.h"
 #endif
 
 #include "iot_board.h"
@@ -150,7 +151,9 @@ static void on_bt_state_changed(bool connected) {
     ESP_LOGI(TAG, "BT connected — disabling AirPlay");
     stop_airplay_services();
     playback_control_set_source(PLAYBACK_SOURCE_BLUETOOTH);
+    rl_app_on_bt_connected(true);
   } else {
+    rl_app_on_bt_connected(false);
     ESP_LOGI(TAG, "BT disconnected — re-enabling AirPlay");
     playback_control_set_source(PLAYBACK_SOURCE_NONE);
     if (ethernet_is_connected() || wifi_is_connected()) {
@@ -295,7 +298,6 @@ void app_main(void) {
   buttons_init();
 
   // RL BT DSP custom components
-  extern void rl_app_init(void);
   rl_app_init();
 
   while (1) {

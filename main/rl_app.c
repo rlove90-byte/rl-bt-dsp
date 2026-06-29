@@ -5,6 +5,8 @@
 #include "rl_tws.h"
 #include "rl_amp.h"
 #include "esp_log.h"
+#include "rtsp_events.h"
+#include "rl_app.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -72,17 +74,42 @@ static void batt_task(void *arg) {
     }
 }
 
+static void on_rtsp_event(rtsp_event_t event, const rtsp_event_data_t *data, void *user_data) {
+    (void)data; (void)user_data;
+    switch(event) {
+    case RTSP_EVENT_PLAYING:  rl_app_on_bt_playing(true);  break;
+    case RTSP_EVENT_PAUSED:   rl_app_on_bt_playing(false); break;
+    case RTSP_EVENT_DISCONNECTED: rl_app_on_bt_connected(false); break;
+    default: break;
+    }
+}
+
+void rl_app_on_bt_connected(bool connected) {
+    if (connected) {
+        rl_leds_set_bt_state(LED_BT_CONNECTED);
+    } else {
+        rl_leds_set_bt_state(LED_BT_DISCONNECTED);
+    }
+}
+
+void rl_app_on_bt_playing(bool playing) {
+    rl_leds_set_bt_state(playing ? LED_BT_PLAYING : LED_BT_CONNECTED);
+}
+
 void rl_app_init(void) {
     ESP_LOGI(TAG,"RL BT DSP starting");
     rl_amp_init();
     rl_leds_init();
     rl_leds_set_mode(LED_MODE_BOOT);
     rl_battery_init();
-    rl_leds_show_battery(rl_battery_get_pct());
     rl_buttons_init(on_button);
     rl_tws_init(on_tws_audio, on_tws_slave);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    rl_leds_show_battery(75); // TODO: replace with rl_battery_get_pct() when battery connected
+    vTaskDelay(pdMS_TO_TICKS(1000));
     apply_dsp(DSP_MODE_INDOOR);
     xTaskCreate(batt_task,"batt_mon",4096,NULL,2,NULL);
     rl_amp_unmute();
+    rtsp_events_register(on_rtsp_event, NULL);
     ESP_LOGI(TAG,"RL BT DSP init complete");
 }
