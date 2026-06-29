@@ -17,6 +17,7 @@ static const char *TAG = "rl_main";
 typedef enum { DSP_MODE_INDOOR=0, DSP_MODE_OUTDOOR, DSP_MODE_ROOM_CORRECTION } dsp_mode_t;
 static dsp_mode_t s_dsp = DSP_MODE_INDOOR;
 static bool s_on = true;
+static bool s_played_connected_tone = false;
 
 static void apply_dsp(dsp_mode_t mode) {
     s_dsp=mode;
@@ -97,6 +98,9 @@ void rl_app_on_bt_connected(bool connected) {
 
 void rl_app_on_bt_playing(bool playing) {
     rl_leds_set_bt_state(playing ? LED_BT_PLAYING : LED_BT_CONNECTED);
+    if (playing && !s_played_connected_tone) {
+        s_played_connected_tone = true;
+    }
 }
 
 void rl_app_init(void) {
