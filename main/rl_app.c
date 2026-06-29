@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "rtsp_events.h"
 #include "rl_app.h"
+#include "a2dp_sink.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -32,13 +33,13 @@ static void on_button(btn_event_t e) {
         if(s_on){ s_on=false; rl_amp_mute(); rl_leds_set_mode(LED_MODE_OFF); ESP_LOGI(TAG,"Power off"); }
         else { s_on=true; rl_leds_show_battery(rl_battery_get_pct()); rl_amp_unmute(); apply_dsp(s_dsp); ESP_LOGI(TAG,"Power on"); }
         break;
-    case BTN_EVT_PLAY_SINGLE:  ESP_LOGI(TAG,"Play/Pause"); break;
-    case BTN_EVT_PLAY_DOUBLE:  ESP_LOGI(TAG,"Next track"); break;
-    case BTN_EVT_PLAY_TRIPLE:  ESP_LOGI(TAG,"Prev track"); break;
+    case BTN_EVT_PLAY_SINGLE:  bt_a2dp_send_playpause(); break;
+    case BTN_EVT_PLAY_DOUBLE:  bt_a2dp_send_next(); break;
+    case BTN_EVT_PLAY_TRIPLE:  bt_a2dp_send_prev(); break;
     case BTN_EVT_VOL_UP:
-    case BTN_EVT_VOL_UP_HELD:  ESP_LOGI(TAG,"Vol+"); break;
+    case BTN_EVT_VOL_UP_HELD:  bt_a2dp_send_volume_up(); break;
     case BTN_EVT_VOL_DOWN:
-    case BTN_EVT_VOL_DOWN_HELD:ESP_LOGI(TAG,"Vol-"); break;
+    case BTN_EVT_VOL_DOWN_HELD:bt_a2dp_send_volume_down(); break;
     case BTN_EVT_MODE_SINGLE:  apply_dsp(s_dsp==DSP_MODE_INDOOR ? DSP_MODE_OUTDOOR : DSP_MODE_INDOOR); break;
     case BTN_EVT_MODE_LONG:    apply_dsp(DSP_MODE_ROOM_CORRECTION); break;
     case BTN_EVT_COMBO_RESET:
@@ -46,6 +47,8 @@ static void on_button(btn_event_t e) {
         vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); break;
     case BTN_EVT_COMBO_PAIRING:
         ESP_LOGI(TAG,"Pairing mode"); rl_leds_set_mode(LED_MODE_PAIRING); break;
+    case BTN_EVT_COMBO_WIFI_SETUP:
+        ESP_LOGI(TAG,"WiFi setup mode - reboot into AP"); rl_leds_set_mode(LED_MODE_OFF); vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); break;
     default: break;
     }
 }

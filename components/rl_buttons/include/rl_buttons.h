@@ -28,6 +28,7 @@ typedef enum {
     BTN_EVT_MODE_LONG,
     BTN_EVT_COMBO_RESET,
     BTN_EVT_COMBO_PAIRING,
+    BTN_EVT_COMBO_WIFI_SETUP,
 } btn_event_t;
 
 typedef void (*btn_event_cb_t)(btn_event_t event);

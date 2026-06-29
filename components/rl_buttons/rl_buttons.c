@@ -43,6 +43,9 @@ static void process_btn(btn_id_t id) {
             if (id==BTN_ID_POWER && both_pressed(BTN_ID_POWER,BTN_ID_PLAY)) {
                 if (held>=BTN_COMBO_HOLD_MS && !b->held_fired) { b->held_fired=true; b->state=BS_HELD; fire(BTN_EVT_COMBO_PAIRING); } break;
             }
+            if (id==BTN_ID_MODE && both_pressed(BTN_ID_MODE,BTN_ID_VOL_DOWN)) {
+                if (held>=BTN_COMBO_HOLD_MS && !b->held_fired) { b->held_fired=true; b->state=BS_HELD; fire(BTN_EVT_COMBO_WIFI_SETUP); } break;
+            }
             if (held>=BTN_LONG_PRESS_MS && !b->held_fired) {
                 b->held_fired=true; b->state=BS_HELD;
                 switch(id) {
