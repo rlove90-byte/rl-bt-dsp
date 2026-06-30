@@ -163,13 +163,26 @@ static void bt_i2s_writer_task(void *arg) {
   xSemaphoreTake(s_i2s_sem, portMAX_DELAY);
 
   int16_t silence[256] = {0};
+  int16_t scaled[256];
 
   while (s_i2s_task_running) {
     size_t item_size = 0;
     void *data =
         xRingbufferReceiveUpTo(s_ringbuf, &item_size, pdMS_TO_TICKS(20), 512);
     if (data != NULL && item_size > 0) {
-      audio_output_write(data, item_size, portMAX_DELAY);
+      int16_t *src = (int16_t *)data;
+      size_t n_samples = item_size / sizeof(int16_t);
+      int32_t vol_q15 = ((int32_t)s_avrc_volume * 32767) / 127;
+      size_t offset = 0;
+      while (offset < n_samples) {
+        size_t chunk = n_samples - offset;
+        if (chunk > 256) chunk = 256;
+        for (size_t k = 0; k < chunk; k++) {
+          scaled[k] = (int16_t)(((int32_t)src[offset + k] * vol_q15) >> 15);
+        }
+        audio_output_write(scaled, chunk * sizeof(int16_t), portMAX_DELAY);
+        offset += chunk;
+      }
       vRingbufferReturnItem(s_ringbuf, data);
     } else {
       // Buffer underrun — write silence to keep I2S fed
@@ -599,7 +612,7 @@ static void bt_avrc_tg_evt_handler(uint16_t event, void *param) {
   case ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_CMD_EVT: {
     uint8_t volume = tg->set_abs_vol.volume; // 0-127
     s_avrc_volume = volume;
-    ESP_LOGD(TAG, "Set absolute volume: %d/127", volume);
+    ESP_LOGW(TAG, "Set absolute volume: %d/127", volume);
 
     // Map 0-127 → -30..0 dB and apply to DAC
     // dac_set_volume does I2C — safe here because bt_app_task dispatches
