@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "rtsp_events.h"
 #include "rl_app.h"
+#include "esp_sleep.h"
 #include "a2dp_sink.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,8 +31,9 @@ static void apply_dsp(dsp_mode_t mode) {
 
 static void on_button(btn_event_t e) {
     switch(e){
+    case BTN_EVT_POWER_SINGLE: rl_battery_update(); rl_leds_show_battery(rl_battery_get_pct()); break;
     case BTN_EVT_POWER_LONG:
-        if(s_on){ s_on=false; rl_amp_mute(); rl_leds_set_mode(LED_MODE_OFF); ESP_LOGI(TAG,"Power off"); }
+        if(s_on){ s_on=false; rl_amp_mute(); rl_leds_set_mode(LED_MODE_OFF); ESP_LOGI(TAG,"Power off - entering deep sleep"); vTaskDelay(pdMS_TO_TICKS(500)); esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_POWER_GPIO, 0); esp_deep_sleep_start(); }
         else { s_on=true; rl_leds_show_battery(rl_battery_get_pct()); rl_amp_unmute(); apply_dsp(s_dsp); ESP_LOGI(TAG,"Power on"); }
         break;
     case BTN_EVT_PLAY_SINGLE:  bt_a2dp_send_playpause(); break;

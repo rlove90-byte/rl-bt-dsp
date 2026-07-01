@@ -6,6 +6,7 @@
 #define BATT_LOW_PCT        15
 #define BATT_CRITICAL_PCT   5
 void rl_battery_init(void);
+void rl_battery_update(void);
 uint8_t rl_battery_get_pct(void);
 uint32_t rl_battery_get_mv(void);
 bool rl_battery_is_low(void);

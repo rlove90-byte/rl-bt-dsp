@@ -16,6 +16,7 @@
 
 typedef enum {
     BTN_EVT_NONE = 0,
+    BTN_EVT_POWER_SINGLE,
     BTN_EVT_POWER_LONG,
     BTN_EVT_PLAY_SINGLE,
     BTN_EVT_PLAY_DOUBLE,

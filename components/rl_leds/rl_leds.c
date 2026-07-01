@@ -111,8 +111,9 @@ static uint8_t bt_brightness(void) {
 }
 
 static void anim_battery(uint8_t pct) {
-    int lit = (RL_LED_COUNT * pct) / 100;
+    int lit = (RL_LED_COUNT * pct + 99) / 100; /* round up */
     if (lit == 0 && pct > 0) lit = 1;
+    if (lit > RL_LED_COUNT) lit = RL_LED_COUNT;
     for (int i = 0; i < RL_LED_COUNT; i++) {
         if (i < lit) { s_pixels[i].g = 200; s_pixels[i].r = 0; s_pixels[i].b = 0; }
         else         { s_pixels[i].g = 0;   s_pixels[i].r = 0; s_pixels[i].b = 0; }

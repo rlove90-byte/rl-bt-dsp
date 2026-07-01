@@ -4,6 +4,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include <string.h>
+#include "esp_heap_caps.h"
 
 static const char *TAG = "rl_buttons";
 
@@ -12,13 +13,15 @@ typedef enum { BS_IDLE=0, BS_PRESSED, BS_HELD, BS_WAIT_MULTI } btn_state_t;
 
 typedef struct {
     int gpio; btn_state_t state;
-    uint32_t press_time_ms, release_time_ms;
+    uint32_t press_time_ms, release_time_ms, last_repeat_ms;
     int tap_count; bool held_fired;
 } btn_ctx_t;
 
 static btn_ctx_t s_btns[BTN_COUNT];
 static btn_event_cb_t s_callback = NULL;
 static const int s_gpio_map[BTN_COUNT] = { BTN_POWER_GPIO, BTN_PLAY_GPIO, BTN_VOL_UP_GPIO, BTN_VOL_DOWN_GPIO, BTN_MODE_GPIO };
+
+#define BTN_VOL_REPEAT_MS 120  /* repeat interval while vol held */
 
 static uint32_t now_ms(void) { return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS); }
 static void fire(btn_event_t e) { if (s_callback) s_callback(e); }
@@ -34,8 +37,13 @@ static void process_btn(btn_id_t id) {
         if (pressed) { b->press_time_ms=t; b->state=BS_PRESSED; b->held_fired=false; }
         break;
     case BS_PRESSED:
-        if (!pressed) { b->release_time_ms=t; b->tap_count++; b->state=BS_WAIT_MULTI; }
-        else {
+        if (!pressed) {
+            b->release_time_ms=t;
+            /* Vol buttons fire immediately on release, no multi-press wait */
+            if (id==BTN_ID_VOL_UP)   { fire(BTN_EVT_VOL_UP);   b->state=BS_IDLE; b->tap_count=0; break; }
+            if (id==BTN_ID_VOL_DOWN) { fire(BTN_EVT_VOL_DOWN); b->state=BS_IDLE; b->tap_count=0; break; }
+            b->tap_count++; b->state=BS_WAIT_MULTI;
+        } else {
             uint32_t held = t - b->press_time_ms;
             if (id==BTN_ID_VOL_UP && both_pressed(BTN_ID_VOL_UP,BTN_ID_VOL_DOWN)) {
                 if (held>=BTN_COMBO_HOLD_MS && !b->held_fired) { b->held_fired=true; b->state=BS_HELD; fire(BTN_EVT_COMBO_RESET); } break;
@@ -47,11 +55,11 @@ static void process_btn(btn_id_t id) {
                 if (held>=BTN_COMBO_HOLD_MS && !b->held_fired) { b->held_fired=true; b->state=BS_HELD; fire(BTN_EVT_COMBO_WIFI_SETUP); } break;
             }
             if (held>=BTN_LONG_PRESS_MS && !b->held_fired) {
-                b->held_fired=true; b->state=BS_HELD;
+                b->held_fired=true; b->state=BS_HELD; b->last_repeat_ms=t;
                 switch(id) {
-                case BTN_ID_POWER: fire(BTN_EVT_POWER_LONG); break;
-                case BTN_ID_MODE: fire(BTN_EVT_MODE_LONG); break;
-                case BTN_ID_VOL_UP: fire(BTN_EVT_VOL_UP_HELD); break;
+                case BTN_ID_POWER:    fire(BTN_EVT_POWER_LONG);    break;
+                case BTN_ID_MODE:     fire(BTN_EVT_MODE_LONG);     break;
+                case BTN_ID_VOL_UP:   fire(BTN_EVT_VOL_UP_HELD);  break;
                 case BTN_ID_VOL_DOWN: fire(BTN_EVT_VOL_DOWN_HELD); break;
                 default: break;
                 }
@@ -60,6 +68,14 @@ static void process_btn(btn_id_t id) {
         break;
     case BS_HELD:
         if (!pressed) { b->state=BS_IDLE; b->tap_count=0; }
+        else {
+            /* Repeat vol events while held */
+            if ((id==BTN_ID_VOL_UP || id==BTN_ID_VOL_DOWN) &&
+                (t - b->last_repeat_ms) >= BTN_VOL_REPEAT_MS) {
+                b->last_repeat_ms = t;
+                fire(id==BTN_ID_VOL_UP ? BTN_EVT_VOL_UP_HELD : BTN_EVT_VOL_DOWN_HELD);
+            }
+        }
         break;
     case BS_WAIT_MULTI:
         if (pressed) { b->press_time_ms=t; b->state=BS_PRESSED; }
@@ -70,8 +86,7 @@ static void process_btn(btn_id_t id) {
                 else if (b->tap_count==2) fire(BTN_EVT_PLAY_DOUBLE);
                 else if (b->tap_count>=3) fire(BTN_EVT_PLAY_TRIPLE);
                 break;
-            case BTN_ID_VOL_UP: fire(BTN_EVT_VOL_UP); break;
-            case BTN_ID_VOL_DOWN: fire(BTN_EVT_VOL_DOWN); break;
+            case BTN_ID_POWER: fire(BTN_EVT_POWER_SINGLE); break;
             case BTN_ID_MODE: fire(BTN_EVT_MODE_SINGLE); break;
             default: break;
             }
@@ -94,6 +109,10 @@ void rl_buttons_init(btn_event_cb_t callback) {
         s_btns[i].gpio=s_gpio_map[i]; s_btns[i].state=BS_IDLE;
         cfg.pin_bit_mask=(1ULL<<s_gpio_map[i]); gpio_config(&cfg);
     }
-    xTaskCreate(btn_task,"rl_buttons",2048,NULL,5,NULL);
+    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t *stack = heap_caps_malloc(4096 * sizeof(StackType_t), MALLOC_CAP_SPIRAM);
+    if (tcb && stack) {
+        xTaskCreateStaticPinnedToCore(btn_task, "rl_buttons", 4096, NULL, 5, stack, tcb, 0);
+    }
 }
 void rl_buttons_tick(void) {}
