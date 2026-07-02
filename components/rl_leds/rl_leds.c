@@ -1,6 +1,7 @@
 #include "rl_leds.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "driver/rmt_tx.h"
 #include "driver/rmt_encoder.h"
 #include "esp_log.h"
@@ -170,7 +171,9 @@ void rl_leds_init(void) {
     ESP_ERROR_CHECK(rmt_enable(s_chan));
     fill(0, 0, 0, 0);
     s_mode = LED_MODE_BOOT;
-    xTaskCreate(led_task, "rl_leds", 3072, NULL, 4, NULL);
+    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t *stack = heap_caps_malloc(3072 * sizeof(StackType_t), MALLOC_CAP_SPIRAM);
+    if (tcb && stack) xTaskCreateStaticPinnedToCore(led_task, "rl_leds", 3072, NULL, 4, stack, tcb, 0);
     ESP_LOGI(TAG, "LED init: %d LEDs GPIO%d", RL_LED_COUNT, RL_LED_GPIO);
 }
 

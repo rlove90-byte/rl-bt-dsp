@@ -117,7 +117,9 @@ void rl_app_init(void) {
     rl_leds_show_battery(75); // TODO: replace with rl_battery_get_pct() when battery connected
     vTaskDelay(pdMS_TO_TICKS(1000));
     apply_dsp(DSP_MODE_INDOOR);
-    xTaskCreate(batt_task,"batt_mon",4096,NULL,2,NULL);
+    { StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t *stack = heap_caps_malloc(4096 * sizeof(StackType_t), MALLOC_CAP_SPIRAM);
+    if (tcb && stack) xTaskCreateStaticPinnedToCore(batt_task, "batt_mon", 4096, NULL, 2, stack, tcb, 0); }
     rl_amp_unmute();
     rtsp_events_register(on_rtsp_event, NULL);
     ESP_LOGI(TAG,"RL BT DSP init complete");

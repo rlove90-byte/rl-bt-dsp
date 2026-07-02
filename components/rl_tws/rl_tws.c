@@ -6,6 +6,7 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -127,7 +128,9 @@ void rl_tws_init(tws_audio_cb_t audio_cb, tws_slave_cb_t slave_cb) {
     esp_now_init();
     esp_now_register_recv_cb(on_recv);
     esp_now_register_send_cb(on_sent);
-    xTaskCreate(tws_task,"rl_tws",4096,NULL,6,NULL);
+    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t *stack = heap_caps_malloc(4096 * sizeof(StackType_t), MALLOC_CAP_SPIRAM);
+    if (tcb && stack) xTaskCreateStaticPinnedToCore(tws_task, "rl_tws", 4096, NULL, 6, stack, tcb, 0);
     ESP_LOGI(TAG,"TWS init, searching %dms",TWS_SLAVE_SEARCH_MS);
 }
 
